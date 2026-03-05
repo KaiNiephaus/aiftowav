@@ -62,6 +62,7 @@ ffprobe -version
 ```
 
 ---
+
 ## Optional: install as a global command
 
 If you want to run `aif2wav` from anywhere (without using `./`), you can install it globally.
@@ -75,6 +76,8 @@ After that you can run:
 
 aif2wav --help
 aif2wav /path/to/samplepack
+
+---
 
 # Usage
 
