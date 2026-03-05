@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# aif2wav — Convert AIFF (.aif/.aiff) to WAV while preserving:
+# - sample rate
+# - bit depth / sample format (as far as ffmpeg reports reliably)
+#
+# Features:
+# - accepts a single file or a folder (recursive)
+# - keeps originals intact
+# - skips if target .wav already exists
+# - refuses to run on "/" (safety)
+#
+# Dependencies: ffmpeg, ffprobe (from Homebrew ffmpeg)
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  aif2wav <file-or-folder>
+
+Examples:
+  aif2wav kick.aif
+  aif2wav /path/to/samplepack
+  aif2wav "/path/with spaces/Samples"
+
+Notes:
+  - Output WAV is created next to the source AIFF (same base name).
+  - Existing WAVs are skipped (no overwrite).
+USAGE
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+target="${1:-}"
+if [[ -z "$target" ]]; then
+  usage
+  exit 1
+fi
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "Missing dependency: $1"
+    echo "Install ffmpeg via Homebrew: brew install ffmpeg"
+    exit 1
+  }
+}
+
+need_cmd ffmpeg
+need_cmd ffprobe
+
+convert_one() {
+  local in="$1"
+  local out="${in%.*}.wav"
+
+  if [[ -e "$out" ]]; then
+    echo "Skipping (exists): $out"
+    return 0
+  fi
+
+  local sr fmt codec
+  sr="$(ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate -of default=nk=1:nw=1 "$in" || true)"
+  fmt="$(ffprobe -v error -select_streams a:0 -show_entries stream=sample_fmt  -of default=nk=1:nw=1 "$in" || true)"
+
+  if [[ -z "${sr:-}" ]]; then
+    echo "FAILED (couldn't read sample rate): $in"
+    return 1
+  fi
+  if [[ -z "${fmt:-}" ]]; then
+    fmt="s24"
+  fi
+
+  case "$fmt" in
+    s16|s16p) codec="pcm_s16le" ;;
+    s24|s24p) codec="pcm_s24le" ;;
+    s32|s32p) codec="pcm_s32le" ;;
+    flt|fltp) codec="pcm_f32le" ;;
+    dbl|dblp) codec="pcm_f64le" ;;
+    *)        codec="pcm_s24le" ;;
+  esac
+
+  ffmpeg -v error -y -i "$in" -ar "$sr" -acodec "$codec" "$out" \
+    && echo "Converted: $in → $out  (${sr}Hz, ${fmt})" \
+    || { echo "FAILED: $in"; return 1; }
+}
+
+# Single file mode
+if [[ -f "$target" ]]; then
+  convert_one "$target"
+  exit $?
+fi
+
+# Folder mode
+abs="$(cd "$target" 2>/dev/null && pwd -P)" || { echo "Folder not found: $target"; exit 1; }
+if [[ "$abs" == "/" ]]; then
+  echo "Refusing to run on /. Choose a specific folder."
+  exit 1
+fi
+
+find "$abs" -type f \( -iname "*.aif" -o -iname "*.aiff" \) -print0 2>/dev/null \
+| while IFS= read -r -d '' f; do
+    convert_one "$f" || true
+  done
